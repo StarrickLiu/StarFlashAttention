@@ -1,0 +1,2 @@
+# StarFlashAttention
+复现实践FlashAttention高性能算子
