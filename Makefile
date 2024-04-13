@@ -1,16 +1,41 @@
-# 找出src目录下的所有.cu文件，包括子目录
-CC_FILES := $(shell find ./src/ -name "*.cu")
-# 将找到的.cu文件路径转换为build目录下的目标路径
-EXE_FILES := $(patsubst ./src/%.cu,./build/%,$(CC_FILES))
+CC_FILES=$(shell find ./src/ -name "*.cc")
+CU_FILES=$(shell find ./src/ -name "*.cu")
+CPP_FILES=$(shell find ./examples/cpp/ -name "*.cc")
+LIB_NAME=libStarFlashAttention.so
+LIB_PATH=./build/$(LIB_NAME)
+EXECUTABLES=$(CPP_FILES:./examples/cpp/%.cc=./build/%)
+BUILD_DIR=./build
+OBJ_DIR=$(BUILD_DIR)/obj
+CU_OBJ=$(CU_FILES:./src/%.cu=$(OBJ_DIR)/%.o)
+DEVICE_LINK_FILE=$(OBJ_DIR)/device_link.o
 
-# 默认目标：编译所有
-all: $(EXE_FILES)
+all: build $(LIB_PATH) $(EXECUTABLES)
 
-# 为每个目标确保目录存在
-./build/%: ./src/%.cu
-	@mkdir -p $(dir $@)
-	nvcc -o $@ $< -O2 -arch=sm_86 -std=c++17 -I3rd/cutlass/include --expt-relaxed-constexpr -cudart shared --cudadevrt none -lcublasLt -lcublas
+build:
+	@mkdir -p $(BUILD_DIR)
+	@mkdir -p $(OBJ_DIR)
 
-# 清理构建文件
+# Compile utils.cu first
+$(OBJ_DIR)/utils.o: ./src/utils.cu
+	@mkdir -p $(@D) # Ensure the directory exists
+	nvcc -c $< -o $@ -O2 -arch=sm_86 -std=c++17 -I. --expt-relaxed-constexpr --compiler-options '-fPIC' -rdc=true
+
+# Compile flash_attn.cu after utils.cu
+$(OBJ_DIR)/flash_attn.o: ./src/flash_attn.cu $(OBJ_DIR)/utils.o
+	@mkdir -p $(@D) # Ensure the directory exists
+	nvcc -c $< -o $@ -O2 -arch=sm_86 -std=c++17 -I. --expt-relaxed-constexpr --compiler-options '-fPIC' -rdc=true
+
+# Device link step
+$(DEVICE_LINK_FILE): $(CU_OBJ)
+	nvcc -dlink $^ -o $@ -arch=sm_86 -lcublasLt -lcublas --compiler-options '-fPIC' -rdc=true
+
+# Link all object files to a single shared library
+$(LIB_PATH): $(CU_OBJ) $(CC_FILES) $(DEVICE_LINK_FILE)
+	nvcc -o $@ $^ -shared -arch=sm_86 -lcublasLt -lcublas
+
+# Compile each C++ file in examples/cpp using the shared library
+$(EXECUTABLES): ./build/% : ./examples/cpp/%.cc $(LIB_PATH)
+	nvcc -o $@ $< -O2 -arch=sm_86 -std=c++17 -I. -I./src -L./build -lStarFlashAttention -lcublas -lcudart
+
 clean:
-	rm -rf ./build/
+	rm -rf $(BUILD_DIR)
