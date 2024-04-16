@@ -1,0 +1,8 @@
+LICENSE
+README.md
+setup.py
+./src/flash_api.cpp
+star_flash_attn.egg-info/PKG-INFO
+star_flash_attn.egg-info/SOURCES.txt
+star_flash_attn.egg-info/dependency_links.txt
+star_flash_attn.egg-info/top_level.txt

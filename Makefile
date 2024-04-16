@@ -35,7 +35,7 @@ $(LIB_PATH): $(CU_OBJ) $(CC_FILES) $(DEVICE_LINK_FILE)
 
 # Compile each C++ file in examples/cpp using the shared library
 $(EXECUTABLES): ./build/% : ./examples/cpp/%.cc $(LIB_PATH)
-	nvcc -o $@ $< -O2 -arch=sm_86 -std=c++17 -I. -I./src -L./build -lStarFlashAttention -lcublas -lcudart
+	nvcc -o $@ $< -O2 -arch=sm_86 -std=c++17 -I. -I./src -L./build -lnvToolsExt -lStarFlashAttention -lcublas -lcudart
 
 clean:
 	rm -rf $(BUILD_DIR)

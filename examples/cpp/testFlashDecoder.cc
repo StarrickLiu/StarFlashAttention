@@ -3,6 +3,8 @@
 #include <src/flash_attn.h>
 #include <src/utils.h>
 #include "cuda_fp16.h"
+#include <cmath>
+#include <nvToolsExt.h>
 
 int main()
 {
@@ -17,24 +19,25 @@ int main()
     const int idx_layer = 0;
 
     // 分配并初始化输入和参数结构
-    Flash_decoder_input<half> *input = new Flash_decoder_input<half>;
-    Flash_decoder_params *params = new Flash_decoder_params;
+    Flash_decoder_input input;
+    Flash_decoder_params params;
 
     // 设置参数
-    params->num_splits = num_splits;
-    params->kNThreads = kNThreads;
-    params->kBlockN = 64;
+    params.num_splits = num_splits;
+    params.kNThreads = kNThreads;
+    params.kBlockN = 128;
 
     // Setup input sizes
-    input->batch_size = batch_size;
-    input->num_heads = num_heads;
-    input->head_dim = head_dim;
-    input->memory_max_len = max_seq_len;
-    input->max_input_length = max_seq_len;
-    input->rotary_embedding_dim = head_dim;
-    input->stride = 3 * num_heads * head_dim;
-    input->idx_layer = idx_layer;
-    input->num_layer = num_layer;
+    input.batch_size = batch_size;
+    input.num_heads = num_heads;
+    input.head_dim = head_dim;
+    input.head_dim_inv = 1.0f / std::sqrt(head_dim);
+    input.memory_max_len = max_seq_len;
+    input.max_input_length = max_seq_len;
+    input.rotary_embedding_dim = head_dim;
+    input.stride = 3 * num_heads * head_dim;
+    input.idx_layer = idx_layer;
+    input.num_layer = num_layer;
 
     size_t qkv_matrix_size = 3 * batch_size * num_heads * seq_len * head_dim * sizeof(half);
     size_t matrix_size = batch_size * num_heads * seq_len * head_dim * sizeof(half);
@@ -45,22 +48,19 @@ int main()
     std::cout << "[INFO]"
               << " 内存开始分配" << std::endl;
     // 分配设备内存
-    cudaMalloc((void **)&input->qkv, qkv_matrix_size);
-    cudaMalloc((void **)&input->o, matrix_size);
-    cudaMalloc((void **)&input->o_split, split_matrix_size);
-    cudaMalloc((void **)&input->ell, vector_size);
-    cudaMalloc((void **)&input->m_formula, vector_size);
-    cudaMalloc((void **)&input->k_cache_table, cache_size);
-    cudaMalloc((void **)&input->v_cache_table, cache_size);
-    cudaMalloc((void **)&input->seq_len, batch_size * sizeof(int));
+    cudaMalloc((void **)&input.qkv, qkv_matrix_size);
+    cudaMalloc((void **)&input.o, matrix_size);
+    cudaMalloc((void **)&input.k_cache_table, cache_size);
+    cudaMalloc((void **)&input.v_cache_table, cache_size);
+    cudaMalloc((void **)&input.seq_len, batch_size * sizeof(int));
 
-    // 创建大小为seq_len的host数组，拷贝到device上的input->seq_len中
+    // 创建大小为seq_len的host数组，拷贝到device上的input.seq_len中
     int *seq_len_host = new int[batch_size];
     for (int i = 0; i < batch_size; i++)
     {
         seq_len_host[i] = seq_len;
     }
-    cudaMemcpy(input->seq_len, seq_len_host, batch_size * sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(input.seq_len, seq_len_host, batch_size * sizeof(int), cudaMemcpyHostToDevice);
     delete[] seq_len_host;
 
     half one = __float2half(1.0);
@@ -72,13 +72,13 @@ int main()
     int numBlocks = (num_elements + blockSize - 1) / blockSize;
 
     // 初始化数组
-    init_half_array(input->qkv, one, num_elements, numBlocks, blockSize);
+    init_half_array(reinterpret_cast<half *>(input.qkv), one, num_elements, numBlocks, blockSize);
 
     // (batch_size * num_layer * max_seq_len * num_heads * head_dim)
     num_elements = batch_size * num_layer * max_seq_len * num_heads * head_dim;
     numBlocks = (num_elements + blockSize - 1) / blockSize;
-    init_half_array(input->k_cache_table, one, num_elements, numBlocks, blockSize);
-    init_half_array(input->v_cache_table, one, num_elements, numBlocks, blockSize);
+    init_half_array(reinterpret_cast<half *>(input.k_cache_table), one, num_elements, numBlocks, blockSize);
+    init_half_array(reinterpret_cast<half *>(input.v_cache_table), one, num_elements, numBlocks, blockSize);
     std::cout << "[INFO]"
               << " 内存分配完毕且初始化完毕" << std::endl;
 
@@ -94,7 +94,17 @@ int main()
         fprintf(stderr, "CUDA error before kernel: %s\n", cudaGetErrorString(error));
     }
     // 运行解码器
-    run_flash_decoder<half>(input, params, stream);
+    int num_iter = 2;
+    for (int i = 0; i < 100; i++) {
+        run_flash_decoder<half>(input, params, stream);
+    }
+    nvtxRangePushA("run_flash_decoder Range");
+    for (int i = 0; i < num_iter; i++) {
+
+        run_flash_decoder<half>(input, params, stream);
+        // 结束一个NVTX范围
+    }
+    nvtxRangePop();
 
     std::cout << "[INFO]"
               << " 测试结束" << std::endl;
@@ -103,15 +113,24 @@ int main()
     cudaStreamSynchronize(stream);
     cudaStreamDestroy(stream);
 
+    // 将input.o拷贝至主机内存，并打印第一个head和最后一个head
+    half *o_host = new half[batch_size * num_heads * head_dim];
+    cudaMemcpy(o_host, input.o, batch_size * num_heads * head_dim * sizeof(half), cudaMemcpyDeviceToHost);
+    std::cout << "First head:" << std::endl;
+    for (int i = 0; i < head_dim; i++)
+    {
+        std::cout << __half2float(o_host[i]) << " ";
+    }
+    std::cout << std::endl;
+    std::cout << "Last head:" << std::endl;
+    for (int i = (batch_size * num_heads - 1) * head_dim; i < batch_size * num_heads * head_dim; i++)
+    {
+        std::cout << __half2float(o_host[i]) << " ";
+    }
+    std::cout << std::endl;
+
     // 清理资源
-    cudaFree(input->qkv);
-    cudaFree(input->o);
-    cudaFree(input->o_split);
-    cudaFree(input->ell);
-    cudaFree(input->m_formula);
-
-    delete input;
-    delete params;
-
+    cudaFree(input.qkv);
+    cudaFree(input.o);
     return 0;
 }

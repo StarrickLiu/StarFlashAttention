@@ -1,3 +1,5 @@
+#pragma once
+
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
 #include <iostream>
@@ -11,9 +13,9 @@ struct Traits {
     // T *sQ = reinterpret_cast<T *>(smem);           // (1, head_dim)
     // T *sK = sQ + head_dim;                         // (2 * n_elem_per_blockN, head_dim)
     // T *sV = sK + 2 * n_elem_per_blockN * head_dim; // (2 * n_elem_per_blockN, head_dim)
-    static constexpr int smemQ = head_dim * sizeof(elem_type);
-    static constexpr int smemK = 2 * n_elem_per_blockN * head_dim * sizeof(elem_type);
-    static constexpr int smemV = 2 * n_elem_per_blockN * head_dim * sizeof(elem_type);
+    static constexpr int smemQ = (head_dim + 1) * sizeof(elem_type);
+    static constexpr int smemK = n_elem_per_blockN * (head_dim + 4) * sizeof(elem_type);
+    static constexpr int smemV = n_elem_per_blockN * (head_dim + 4) * sizeof(elem_type);
     static constexpr int smemSize = smemQ + smemK + smemV;
 };
 
