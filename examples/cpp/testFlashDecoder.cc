@@ -6,17 +6,10 @@
 #include <cmath>
 #include <nvToolsExt.h>
 
-int main()
+void test_flash_decoder(int batch_size, int num_heads, int head_dim,
+                        int max_seq_len, int seq_len, int num_splits,
+                        int kNThreads, int num_layer, int idx_layer)
 {
-    const int batch_size = 1;
-    const int num_heads = 32;
-    const int head_dim = 128;
-    const int seq_len = 512;
-    const int max_seq_len = 1024;
-    const int num_splits = 4;
-    const int kNThreads = 32;
-    const int num_layer = 4;
-    const int idx_layer = 0;
 
     // 分配并初始化输入和参数结构
     Flash_decoder_input input;
@@ -39,8 +32,8 @@ int main()
     input.idx_layer = idx_layer;
     input.num_layer = num_layer;
 
-    size_t qkv_matrix_size = 3 * batch_size * num_heads * seq_len * head_dim * sizeof(half);
-    size_t matrix_size = batch_size * num_heads * seq_len * head_dim * sizeof(half);
+    size_t qkv_matrix_size = 3 * batch_size * num_heads * max_seq_len * head_dim * sizeof(half);
+    size_t matrix_size = batch_size * num_heads * max_seq_len * head_dim * sizeof(half);
     size_t split_matrix_size = batch_size * num_heads * num_splits * head_dim * sizeof(half);
     size_t vector_size = batch_size * num_heads * num_splits * sizeof(half);
     size_t cache_size = batch_size * num_layer * max_seq_len * num_heads * head_dim * sizeof(half);
@@ -53,6 +46,10 @@ int main()
     cudaMalloc((void **)&input.k_cache_table, cache_size);
     cudaMalloc((void **)&input.v_cache_table, cache_size);
     cudaMalloc((void **)&input.seq_len, batch_size * sizeof(int));
+    cudaMalloc((void **)&input.rotary_cos_table, head_dim / 2 * max_seq_len * sizeof(half));
+    cudaMalloc((void **)&input.rotary_sin_table, head_dim / 2 * max_seq_len * sizeof(half));
+
+    compute_rotary_table<half>(reinterpret_cast<half *>(input.rotary_cos_table), reinterpret_cast<half *>(input.rotary_sin_table), max_seq_len, head_dim);
 
     // 创建大小为seq_len的host数组，拷贝到device上的input.seq_len中
     int *seq_len_host = new int[batch_size];
@@ -95,11 +92,13 @@ int main()
     }
     // 运行解码器
     int num_iter = 2;
-    for (int i = 0; i < 100; i++) {
+    for (int i = 0; i < 100; i++)
+    {
         run_flash_decoder<half>(input, params, stream);
     }
     nvtxRangePushA("run_flash_decoder Range");
-    for (int i = 0; i < num_iter; i++) {
+    for (int i = 0; i < num_iter; i++)
+    {
 
         run_flash_decoder<half>(input, params, stream);
         // 结束一个NVTX范围
@@ -132,5 +131,21 @@ int main()
     // 清理资源
     cudaFree(input.qkv);
     cudaFree(input.o);
-    return 0;
+    return;
+}
+int main()
+{
+    const int batch_size = 2;
+    const int num_heads = 32;
+    const int head_dim = 128;
+    int max_seq_len[6] = {512, 1024, 2048, 4096, 8192, 8192};
+    int seq_len[6] = {511, 1023, 2047, 4096, 6143, 8191};
+    const int num_splits = 4;
+    const int kNThreads = 32;
+    const int num_layer = 4;
+    const int idx_layer = 0;
+    for (int i = 0; i < 6; i++)
+    {
+        test_flash_decoder(batch_size, num_heads, head_dim, max_seq_len[i], seq_len[i], num_splits, kNThreads, num_layer, idx_layer);
+    }
 }

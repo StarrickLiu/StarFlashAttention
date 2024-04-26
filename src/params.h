@@ -24,6 +24,10 @@ struct Flash_decoder_input
     // The cache for the Vs. The shape must be (Batch, Layer, Seq_len, nheads_k, headdim)
     void * __restrict__ v_cache_table = nullptr;
 
+    // The table for cos and sin the rotary coef, shape: (seqlen, headdim/2)
+    void * __restrict__ rotary_cos_table = nullptr;
+    void * __restrict__ rotary_sin_table = nullptr;
+
     // The batch size.
     int batch_size = 0;
     // The sequence length.
